@@ -41,7 +41,6 @@ typedef struct {
         do_property_t* hash_props;   // stb_ds hash map for large objects
     } properties;
     int is_hashed;                  // 0 = linear array, 1 = hash table
-    da_array methods;               // Function pointers (optional, needs ref counting)
 } do_object_t, *do_object;
 ```
 
@@ -78,7 +77,7 @@ typedef struct {
 typedef struct {
     char* key;                  // Property name (interned string)
     do_value_t value;          // Property value
-    int flags;                 // Enumerable, writable, etc.
+    int flags;                 // Reserved for future property descriptors (unused in v1.0)
 } do_property_t;
 ```
 
@@ -99,13 +98,19 @@ do_object do_get_prototype(do_object obj);
 
 ### Property Access
 ```c
-// Generic property access
-do_value_t do_get(do_object obj, const char* key);
-void do_set(do_object obj, const char* key, do_value_t value);
+// Runtime interning - handles any string key
+do_value_t do_get(do_object obj, const char* key);            // Interns key, then looks up
+void do_set(do_object obj, const char* key, do_value_t value); // Interns key, stores interned version
 int do_has(do_object obj, const char* key);
 void do_delete(do_object obj, const char* key);
 
-// Type-specific setters (convenience)
+// Pre-interned keys - maximum performance when key is already interned
+do_value_t do_get_interned(do_object obj, const char* interned_key);
+void do_set_interned(do_object obj, const char* interned_key, do_value_t value);
+int do_has_interned(do_object obj, const char* interned_key);
+void do_delete_interned(do_object obj, const char* interned_key);
+
+// Type-specific setters (convenience) - use runtime interning
 void do_set_undefined(do_object obj, const char* key);
 void do_set_null(do_object obj, const char* key);
 void do_set_bool(do_object obj, const char* key, int value);
@@ -115,7 +120,7 @@ void do_set_string(do_object obj, const char* key, const char* value);
 void do_set_object(do_object obj, const char* key, do_object value);
 void do_set_array(do_object obj, const char* key, da_array value);
 
-// Type-specific getters
+// Type-specific getters - use runtime interning
 int do_get_bool(do_object obj, const char* key, int default_val);
 int do_get_int(do_object obj, const char* key, int default_val);
 double do_get_float(do_object obj, const char* key, double default_val);
@@ -131,6 +136,8 @@ typedef do_value_t (*do_method_fn)(do_object self, da_array args);
 void do_set_method(do_object obj, const char* name, do_method_fn method);
 do_value_t do_call(do_object obj, const char* method, da_array args);
 ```
+
+**Method Storage**: Methods are stored as regular properties with `DO_FUNCTION` type. This simplifies the design by using the same property system for both data and methods, enabling method inheritance through the prototype chain.
 
 **Method Binding**: Methods use explicit self-as-first-parameter binding. The `self` parameter provides the method's `this` context, while `args` contains user-provided arguments. This approach is thread-safe, explicit, and allows high-level languages to provide `this`-style syntax while the C implementation remains simple.
 
@@ -199,7 +206,7 @@ int do_set_object(do_object obj, const char* key, do_object value) {
 
 ### Memory Management
 - **Reference counting**: Same atomic patterns as `dynamic_array.h` (object-level only)
-- **String interning**: Reduce memory usage and enable pointer-based key comparison
+- **String interning**: Global intern table reduces memory usage and enables pointer-based key comparison
 - **Circular reference prevention**: Fail-fast when setting prototype/property would create cycle
 - **Property storage**: Use `stb_ds` arrays/maps (no ref counting overhead)
 
@@ -285,6 +292,21 @@ do_set_method(plugin, "cleanup", plugin_cleanup);
 do_call(plugin, "init", NULL);
 ```
 
+### 5. **High-Performance Language Interpreters**
+```c
+// Compile-time: intern string literals for maximum performance
+const char* INTERN_NAME = string_intern("name");
+const char* INTERN_AGE = string_intern("age");
+
+// Runtime: blazing fast property access using pre-interned keys
+do_set_interned(obj, INTERN_NAME, make_string_value("Alice"));
+do_value_t name_val = do_get_interned(obj, INTERN_NAME);
+
+// Dynamic property access: runtime interning but optimal for future access
+char* user_key = evaluate_expression(expr);
+do_set(obj, user_key, value);  // Key gets interned for fast future lookups
+```
+
 ## Performance Characteristics
 
 ### Memory Usage
@@ -363,9 +385,8 @@ void maybe_upgrade_to_hash(do_object obj) {
 #include "stb_ds.h"        // Required for hash table optimization
 
 // Uses da_array for:
-// - Method tables (when ref counting is needed)
-// - Argument passing
-// - Key enumeration results
+// - Argument passing (method calls)
+// - Key enumeration results (when ref counting is needed)
 
 // Uses stb_ds for:
 // - Property storage (both linear arrays and hash tables)
