@@ -34,10 +34,14 @@ A lightweight, prototype-based dynamic object system for C, designed for interpr
 ### Object Structure
 ```c
 typedef struct {
-    DA_ATOMIC_INT ref_count;     // Reference counting
+    DA_ATOMIC_INT ref_count;        // Reference counting (object-level)
     struct do_object_t* prototype;  // Inheritance chain
-    da_array properties;         // Key-value pairs
-    da_array methods;           // Function pointers (optional)
+    union {
+        do_property_t* linear_props; // stb_ds array for small objects
+        do_property_t* hash_props;   // stb_ds hash map for large objects
+    } properties;
+    int is_hashed;                  // 0 = linear array, 1 = hash table
+    da_array methods;               // Function pointers (optional, needs ref counting)
 } do_object_t, *do_object;
 ```
 
@@ -128,6 +132,8 @@ void do_set_method(do_object obj, const char* name, do_method_fn method);
 do_value_t do_call(do_object obj, const char* method, da_array args);
 ```
 
+**Method Binding**: Methods use explicit self-as-first-parameter binding. The `self` parameter provides the method's `this` context, while `args` contains user-provided arguments. This approach is thread-safe, explicit, and allows high-level languages to provide `this`-style syntax while the C implementation remains simple.
+
 ### Utility Functions
 ```c
 // Introspection
@@ -162,11 +168,40 @@ do_value_t do_get(do_object obj, const char* key) {
 }
 ```
 
+### Circular Reference Prevention
+```c
+// Prevent cycles when setting prototypes
+int do_set_prototype(do_object obj, do_object prototype) {
+    // Walk up from prototype to check if obj is already in the chain
+    do_object current = prototype;
+    while (current != NULL) {
+        if (current == obj) {
+            // Would create cycle - fail immediately
+            return DO_ERROR_CYCLE;
+        }
+        current = current->prototype;
+    }
+    obj->prototype = prototype;
+    return DO_SUCCESS;
+}
+
+// Similar check when setting object properties
+int do_set_object(do_object obj, const char* key, do_object value) {
+    // Check if value contains obj in its object graph
+    if (contains_object(value, obj)) {
+        return DO_ERROR_CYCLE;
+    }
+    // Safe to set
+    set_property(obj, key, make_object_value(value));
+    return DO_SUCCESS;
+}
+```
+
 ### Memory Management
-- **Reference counting**: Same atomic patterns as `dynamic_array.h`
+- **Reference counting**: Same atomic patterns as `dynamic_array.h` (object-level only)
 - **String interning**: Reduce memory usage for property keys
-- **Circular reference detection**: Mark-and-sweep for prototype cycles
-- **Property array growth**: Use `da_array` with configurable growth
+- **Circular reference prevention**: Fail-fast when setting prototype/property would create cycle
+- **Property storage**: Use `stb_ds` arrays/maps (no ref counting overhead)
 
 ### Configuration Options
 ```c
@@ -184,6 +219,10 @@ do_value_t do_get(do_object obj, const char* key) {
 
 #ifndef DO_ATOMIC_REFCOUNT
 #define DO_ATOMIC_REFCOUNT DA_ATOMIC_REFCOUNT
+#endif
+
+#ifndef DO_HASH_THRESHOLD
+#define DO_HASH_THRESHOLD 8  // Switch to hash table after N properties
 #endif
 ```
 
@@ -255,28 +294,75 @@ do_call(plugin, "init", NULL);
 - **Reference counting**: Automatic cleanup, no GC pauses
 
 ### Time Complexity
-- **Property get**: O(prototype chain depth)
-- **Property set**: O(properties count) for insertion
-- **Method call**: O(prototype chain depth) + function call
+- **Property get**: O(1) with hash table, O(n) with linear array
+- **Property set**: O(1) with hash table, O(n) with linear array
+- **Method call**: O(prototype chain depth) + property lookup time
 - **Object creation**: O(1)
 
+### Hash Table Optimization
+Objects automatically upgrade from linear array to hash table storage when property count exceeds threshold:
+
+```c
+#ifndef DO_HASH_THRESHOLD
+#define DO_HASH_THRESHOLD 8  // Switch to hash table after N properties
+#endif
+
+// Property lookup implementation
+do_value_t find_own_property(do_object obj, const char* key) {
+    if (obj->is_hashed) {
+        // O(1) hash table lookup using stb_ds
+        do_property_t* prop = hmget(obj->properties.hash_props, key);
+        return prop ? prop->value : do_undefined_value();
+    } else {
+        // O(n) linear search for small objects using stb_ds array
+        int len = arrlen(obj->properties.linear_props);
+        for (int i = 0; i < len; i++) {
+            if (strcmp(obj->properties.linear_props[i].key, key) == 0) {
+                return obj->properties.linear_props[i].value;
+            }
+        }
+        return do_undefined_value();
+    }
+}
+
+// Upgrade to hash table when threshold exceeded
+void maybe_upgrade_to_hash(do_object obj) {
+    if (!obj->is_hashed && arrlen(obj->properties.linear_props) > DO_HASH_THRESHOLD) {
+        // Convert linear array to hash table
+        do_property_t* hash_props = NULL;
+        int len = arrlen(obj->properties.linear_props);
+        for (int i = 0; i < len; i++) {
+            do_property_t* prop = &obj->properties.linear_props[i];
+            hmput(hash_props, prop->key, *prop);
+        }
+        arrfree(obj->properties.linear_props);
+        obj->properties.hash_props = hash_props;
+        obj->is_hashed = 1;
+    }
+}
+```
+
 ### Optimization Strategies
-- **Property caching**: Cache frequently accessed properties
-- **Inline properties**: Store first N properties inline in object
-- **Method tables**: Optional vtable-style optimization for hot methods
-- **String interning**: Reduce memory and enable pointer equality
+- **Hybrid storage**: Linear array for small objects (cache-friendly), hash table for large objects (O(1) access)
+- **String interning**: Reduce memory and enable pointer equality for keys
+- **Property caching**: Cache frequently accessed properties from prototype chain
+- **Inline properties**: Store first N properties inline in object structure
 
 ## Integration with dynamic_array.h
 
 ### Dependencies
 ```c
 #include "dynamic_array.h"  // Required dependency
+#include "stb_ds.h"        // Required for hash table optimization
 
 // Uses da_array for:
-// - Property storage
-// - Method tables  
+// - Method tables (when ref counting is needed)
 // - Argument passing
-// - Key enumeration
+// - Key enumeration results
+
+// Uses stb_ds for:
+// - Property storage (both linear arrays and hash tables)
+// - Simpler memory management for property arrays
 ```
 
 ### Shared Configuration
@@ -312,7 +398,7 @@ do_call(plugin, "init", NULL);
 ### Version 1.1 (Methods)
 - Method dispatch system
 - Built-in method support
-- `this` binding
+- Self-as-first-parameter binding (completed in design)
 
 ### Version 1.2 (Optimization)
 - Property caching
