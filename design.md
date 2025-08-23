@@ -199,7 +199,7 @@ int do_set_object(do_object obj, const char* key, do_object value) {
 
 ### Memory Management
 - **Reference counting**: Same atomic patterns as `dynamic_array.h` (object-level only)
-- **String interning**: Reduce memory usage for property keys
+- **String interning**: Reduce memory usage and enable pointer-based key comparison
 - **Circular reference prevention**: Fail-fast when setting prototype/property would create cycle
 - **Property storage**: Use `stb_ds` arrays/maps (no ref counting overhead)
 
@@ -307,17 +307,24 @@ Objects automatically upgrade from linear array to hash table storage when prope
 #define DO_HASH_THRESHOLD 8  // Switch to hash table after N properties
 #endif
 
+// Hash table optimization using interned string keys for maximum performance
+#define PROPERTY_HASH(p) ((uintptr_t)(p.key) >> 3)  // Fast pointer-based hash
+#define PROPERTY_EQUAL(a,b) ((a.key) == (b.key))   // Pointer equality for interned strings
+
 // Property lookup implementation
 do_value_t find_own_property(do_object obj, const char* key) {
+    char* interned_key = string_intern(key);  // Get interned version
+    
     if (obj->is_hashed) {
-        // O(1) hash table lookup using stb_ds
-        do_property_t* prop = hmget(obj->properties.hash_props, key);
-        return prop ? prop->value : do_undefined_value();
+        // O(1) hash table lookup using pointer-based hash
+        do_property_t lookup = {interned_key};
+        do_property_t* found = hmget(obj->properties.hash_props, lookup);
+        return found ? found->value : do_undefined_value();
     } else {
-        // O(n) linear search for small objects using stb_ds array
+        // O(n) linear search using pointer equality (fast for interned strings)
         int len = arrlen(obj->properties.linear_props);
         for (int i = 0; i < len; i++) {
-            if (strcmp(obj->properties.linear_props[i].key, key) == 0) {
+            if (obj->properties.linear_props[i].key == interned_key) {  // Pointer comparison!
                 return obj->properties.linear_props[i].value;
             }
         }
@@ -333,7 +340,7 @@ void maybe_upgrade_to_hash(do_object obj) {
         int len = arrlen(obj->properties.linear_props);
         for (int i = 0; i < len; i++) {
             do_property_t* prop = &obj->properties.linear_props[i];
-            hmput(hash_props, prop->key, *prop);
+            hmput(hash_props, *prop);  // stb_ds uses PROPERTY_HASH/PROPERTY_EQUAL macros
         }
         arrfree(obj->properties.linear_props);
         obj->properties.hash_props = hash_props;
