@@ -1170,6 +1170,102 @@ void test_interpreter_style_methods(void) {
     do_release(&number_proto);
 }
 
+/**
+ * Test realistic interpreter method storage
+ * Methods are language function references, not C function pointers
+ */
+void test_interpreter_language_methods(void) {
+    // Simulate interpreter function/method representation
+    typedef struct {
+        int type;                    // 0=bytecode, 1=native, 2=AST
+        union {
+            struct {
+                unsigned char* bytecode;
+                int length;
+                int arity;           // Number of parameters
+            } bc;
+            struct {
+                void* ast_node;
+                int param_count;
+            } ast;
+        } impl;
+        char* name;                  // Method name for debugging
+    } interpreter_function_t;
+    
+    // Mock bytecode for methods (in real interpreter, this would be compiled code)
+    unsigned char add_bytecode[] = {0x01, 0x02, 0x03, 0x04}; // LOAD_ARG, LOAD_SELF, ADD, RETURN
+    unsigned char to_string_bytecode[] = {0x05, 0x06, 0x07}; // LOAD_SELF, TO_STRING, RETURN
+    
+    // Create interpreter function objects
+    interpreter_function_t add_method = {
+        .type = 0,
+        .impl.bc = {add_bytecode, 4, 1},  // 1 parameter + implicit self
+        .name = "add"
+    };
+    
+    interpreter_function_t to_string_method = {
+        .type = 0, 
+        .impl.bc = {to_string_bytecode, 3, 0},  // 0 parameters + implicit self
+        .name = "toString"
+    };
+    
+    // Create prototype with language methods (not C functions!)
+    do_object number_proto = do_create(NULL);
+    DO_SET(number_proto, "add", add_method);
+    DO_SET(number_proto, "toString", to_string_method);
+    DO_SET(number_proto, "type", "Number");  // Type information
+    
+    // Create instances
+    do_object num1 = do_create_with_prototype(number_proto, NULL);
+    do_object num2 = do_create_with_prototype(number_proto, NULL);
+    
+    // Set interpreter values
+    int value1 = 10, value2 = 20;
+    DO_SET(num1, "value", value1);
+    DO_SET(num2, "value", value2);
+    
+    // Interpreter would look up methods like this:
+    interpreter_function_t* add_func = (interpreter_function_t*)do_get(num1, "add");
+    TEST_ASSERT_NOT_NULL(add_func);
+    
+    // Verify it's the right method
+    TEST_ASSERT_EQUAL_INT(0, add_func->type);  // Bytecode type
+    TEST_ASSERT_EQUAL_INT(4, add_func->impl.bc.length);
+    TEST_ASSERT_EQUAL_INT(1, add_func->impl.bc.arity);
+    TEST_ASSERT_EQUAL_STRING("add", add_func->name);
+    
+    // Verify bytecode content
+    TEST_ASSERT_EQUAL_UINT8(0x01, add_func->impl.bc.bytecode[0]); // LOAD_ARG
+    TEST_ASSERT_EQUAL_UINT8(0x02, add_func->impl.bc.bytecode[1]); // LOAD_SELF  
+    TEST_ASSERT_EQUAL_UINT8(0x03, add_func->impl.bc.bytecode[2]); // ADD
+    TEST_ASSERT_EQUAL_UINT8(0x04, add_func->impl.bc.bytecode[3]); // RETURN
+    
+    // Test toString method
+    interpreter_function_t* to_string_func = (interpreter_function_t*)do_get(num1, "toString");
+    TEST_ASSERT_NOT_NULL(to_string_func);
+    TEST_ASSERT_EQUAL_STRING("toString", to_string_func->name);
+    TEST_ASSERT_EQUAL_INT(0, to_string_func->impl.bc.arity);
+    
+    // Test method inheritance - num2 gets same methods  
+    interpreter_function_t* inherited_add = (interpreter_function_t*)do_get(num2, "add");
+    TEST_ASSERT_EQUAL_PTR(add_func, inherited_add);  // Same method object
+    
+    // Test prototype properties
+    char* proto_type = DO_GET(num1, "type", char*);
+    TEST_ASSERT_EQUAL_STRING("Number", proto_type);
+    
+    // In a real interpreter, method calling would be:
+    // 1. Look up method: do_get(obj, method_name) 
+    // 2. Get interpreter_function_t*
+    // 3. Check arity matches arguments
+    // 4. Execute bytecode/AST with VM
+    // 5. Pass 'self' object as first parameter
+    
+    do_release(&num1);
+    do_release(&num2);
+    do_release(&number_proto);
+}
+
 /* =============================================================================
  * ENHANCED TYPE INFERENCE TESTS
  * ============================================================================= */
@@ -1338,6 +1434,7 @@ int main(void) {
     RUN_TEST(test_method_inheritance);
     RUN_TEST(test_method_shadowing);
     RUN_TEST(test_interpreter_style_methods);
+    RUN_TEST(test_interpreter_language_methods);
     
     // Enhanced type inference tests
     RUN_TEST(test_enhanced_type_inference);
