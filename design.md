@@ -44,42 +44,17 @@ typedef struct {
 } do_object_t, *do_object;
 ```
 
-### Value Types
-```c
-typedef enum {
-    DO_UNDEFINED,
-    DO_NULL,
-    DO_BOOL,
-    DO_INT,
-    DO_FLOAT,
-    DO_STRING,
-    DO_OBJECT,
-    DO_ARRAY,
-    DO_FUNCTION
-} do_value_type_t;
-
-typedef struct {
-    do_value_type_t type;
-    union {
-        int bool_val;
-        int int_val;
-        double float_val;
-        char* string_val;        // Ref-counted string
-        do_object object_val;
-        da_array array_val;
-        do_function function_val;
-    } data;
-} do_value_t;
-```
-
-### Property Storage
+### Generic Property Storage
 ```c
 typedef struct {
-    char* key;                  // Property name (interned string)
-    do_value_t value;          // Property value
-    int flags;                 // Reserved for future property descriptors (unused in v1.0)
+    char* key;                     // Property name (interned string)
+    void* data;                    // Generic data pointer
+    size_t size;                   // Size of the data in bytes
+    void (*destructor)(void*);     // Optional cleanup function (can be NULL)
 } do_property_t;
 ```
+
+**Design Philosophy**: Like `dynamic_array.h`, DO is completely type-agnostic. It stores arbitrary data using `void*` + `size`, enabling any language interpreter to use its own value types directly. The optional destructor function allows proper cleanup of complex types when properties are overwritten or objects are destroyed.
 
 ## Core API Design
 
@@ -96,82 +71,91 @@ void do_set_prototype(do_object obj, do_object prototype);
 do_object do_get_prototype(do_object obj);
 ```
 
-### Property Access
+### Generic Property Access
 ```c
-// Runtime interning - handles any string key
-do_value_t do_get(do_object obj, const char* key);            // Interns key, then looks up
-void do_set(do_object obj, const char* key, do_value_t value); // Interns key, stores interned version
+// Core functions for arbitrary data types (like DA's element handling)
+void* do_get(do_object obj, const char* key);                    // Returns pointer to data, NULL if not found
+void do_set(do_object obj, const char* key, const void* data, size_t size, void (*destructor)(void*));
 int do_has(do_object obj, const char* key);
 void do_delete(do_object obj, const char* key);
 
 // Pre-interned keys - maximum performance when key is already interned
-do_value_t do_get_interned(do_object obj, const char* interned_key);
-void do_set_interned(do_object obj, const char* interned_key, do_value_t value);
+void* do_get_interned(do_object obj, const char* interned_key);
+void do_set_interned(do_object obj, const char* interned_key, const void* data, size_t size, void (*destructor)(void*));
 int do_has_interned(do_object obj, const char* interned_key);
 void do_delete_interned(do_object obj, const char* interned_key);
 
-// Type-specific setters (convenience) - use runtime interning
-void do_set_undefined(do_object obj, const char* key);
-void do_set_null(do_object obj, const char* key);
-void do_set_bool(do_object obj, const char* key, int value);
-void do_set_int(do_object obj, const char* key, int value);
-void do_set_float(do_object obj, const char* key, double value);
-void do_set_string(do_object obj, const char* key, const char* value);
-void do_set_object(do_object obj, const char* key, do_object value);
-void do_set_array(do_object obj, const char* key, da_array value);
+// Type-safe macros (similar to DA_PUSH, DA_AT)
+#define DO_SET(obj, key, value) \
+    do { typeof(value) _temp = (value); do_set(obj, key, &_temp, sizeof(_temp), NULL); } while(0)
 
-// Type-specific getters - use runtime interning
-int do_get_bool(do_object obj, const char* key, int default_val);
-int do_get_int(do_object obj, const char* key, int default_val);
-double do_get_float(do_object obj, const char* key, double default_val);
-char* do_get_string(do_object obj, const char* key, const char* default_val);
-do_object do_get_object(do_object obj, const char* key);
-da_array do_get_array(do_object obj, const char* key);
+#define DO_SET_INTERNED(obj, key, value) \
+    do { typeof(value) _temp = (value); do_set_interned(obj, key, &_temp, sizeof(_temp), NULL); } while(0)
+
+#define DO_GET(obj, key, type) \
+    (*(type*)do_get(obj, key))
+
+#define DO_GET_INTERNED(obj, key, type) \
+    (*(type*)do_get_interned(obj, key))
+
+// For types requiring cleanup
+#define DO_SET_WITH_DESTRUCTOR(obj, key, value, destructor_fn) \
+    do { typeof(value) _temp = (value); do_set(obj, key, &_temp, sizeof(_temp), destructor_fn); } while(0)
 ```
 
 ### Method System (Optional)
-```c
-typedef do_value_t (*do_method_fn)(do_object self, da_array args);
+Since DO is completely generic, method dispatch is left to the application layer. Objects can store function pointers as properties just like any other data:
 
-void do_set_method(do_object obj, const char* name, do_method_fn method);
-do_value_t do_call(do_object obj, const char* method, da_array args);
+```c
+// Example: Storing function pointers as properties
+typedef void (*my_method_fn)(do_object self, void* args);
+
+my_method_fn my_function = some_function;
+DO_SET(obj, "my_method", my_function);
+
+// Later: retrieve and call
+my_method_fn method = DO_GET(obj, "my_method", my_method_fn);
+if (method) {
+    method(obj, some_args);
+}
 ```
 
-**Method Storage**: Methods are stored as regular properties with `DO_FUNCTION` type. This simplifies the design by using the same property system for both data and methods, enabling method inheritance through the prototype chain.
-
-**Method Binding**: Methods use explicit self-as-first-parameter binding. The `self` parameter provides the method's `this` context, while `args` contains user-provided arguments. This approach is thread-safe, explicit, and allows high-level languages to provide `this`-style syntax while the C implementation remains simple.
+**Design Rationale**: By making DO completely generic, method dispatch becomes an application concern. This allows each interpreter to implement method calling in the way that best fits their value system and calling conventions, whether that's JavaScript-style `this` binding, Python-style `self` parameters, or something else entirely.
 
 ### Utility Functions
 ```c
 // Introspection
-da_array do_get_own_keys(do_object obj);
-da_array do_get_all_keys(do_object obj);  // Including prototype chain
+da_array do_get_own_keys(do_object obj);              // Returns da_array of char* (string keys)
+da_array do_get_all_keys(do_object obj);              // Including prototype chain
 int do_property_count(do_object obj);
 
-// Serialization helpers
-char* do_to_json(do_object obj);
-do_object do_from_json(const char* json);
+// Property iteration (for generic serialization, debugging, etc.)
+void do_foreach_property(do_object obj, 
+                        void (*callback)(const char* key, void* data, size_t size, void* context),
+                        void* context);
 ```
+
+**Note**: Serialization is intentionally omitted from the core library since DO doesn't know about specific data types. Applications can implement serialization by iterating over properties using `do_foreach_property()` and handling each data type according to their specific needs.
 
 ## Implementation Details
 
 ### Property Lookup Algorithm
 ```c
-do_value_t do_get(do_object obj, const char* key) {
+void* do_get(do_object obj, const char* key) {
     // 1. Check own properties first
-    do_value_t val = find_own_property(obj, key);
-    if (val.type != DO_UNDEFINED) return val;
+    void* data = find_own_property(obj, key);
+    if (data != NULL) return data;
     
     // 2. Walk prototype chain
     do_object current = obj->prototype;
     while (current != NULL) {
-        val = find_own_property(current, key);
-        if (val.type != DO_UNDEFINED) return val;
+        data = find_own_property(current, key);
+        if (data != NULL) return data;
         current = current->prototype;
     }
     
     // 3. Not found
-    return do_undefined_value();
+    return NULL;
 }
 ```
 
@@ -188,27 +172,22 @@ int do_set_prototype(do_object obj, do_object prototype) {
         }
         current = current->prototype;
     }
-    obj->prototype = prototype;
-    return DO_SUCCESS;
-}
-
-// Similar check when setting object properties
-int do_set_object(do_object obj, const char* key, do_object value) {
-    // Check if value contains obj in its object graph
-    if (contains_object(value, obj)) {
-        return DO_ERROR_CYCLE;
-    }
-    // Safe to set
-    set_property(obj, key, make_object_value(value));
+    
+    // Release old prototype and retain new one
+    if (obj->prototype) do_release(&obj->prototype);
+    obj->prototype = prototype ? do_retain(prototype) : NULL;
     return DO_SUCCESS;
 }
 ```
 
+**Note**: Since DO is generic, it cannot automatically detect cycles in property values (it doesn't know which properties contain object references). Cycle detection for property values must be implemented by the application layer if needed.
+
 ### Memory Management
 - **Reference counting**: Same atomic patterns as `dynamic_array.h` (object-level only)
 - **String interning**: Global intern table reduces memory usage and enables pointer-based key comparison
-- **Circular reference prevention**: Fail-fast when setting prototype/property would create cycle
-- **Property storage**: Use `stb_ds` arrays/maps (no ref counting overhead)
+- **Property cleanup**: Each property can have an optional destructor function for proper cleanup
+- **Generic data storage**: Properties store copies of data (like DA), destructor called when property is overwritten or object destroyed
+- **Property storage**: Use `stb_ds` arrays/maps for efficient property management
 
 ### Configuration Options
 ```c
@@ -218,10 +197,6 @@ int do_set_object(do_object obj, const char* key, do_object value) {
 
 #ifndef DO_STRING_INTERNING
 #define DO_STRING_INTERNING 1
-#endif
-
-#ifndef DO_METHOD_SUPPORT  
-#define DO_METHOD_SUPPORT 1
 #endif
 
 #ifndef DO_ATOMIC_REFCOUNT
@@ -235,85 +210,102 @@ int do_set_object(do_object obj, const char* key, do_object value) {
 
 ## Use Cases
 
-### 1. **Interpreter Variables**
+### 1. **JavaScript Interpreter**
 ```c
-// var user = {name: "John", age: 30, address: {city: "NYC"}}
+// JavaScript values using NaN-boxing
+typedef uint64_t JSValue;
+
 do_object user = do_create();
-do_set_string(user, "name", "John");
-do_set_int(user, "age", 30);
+JSValue name = js_make_string("John");
+JSValue age = js_make_number(30);
 
-do_object address = do_create();
-do_set_string(address, "city", "NYC");
-do_set_object(user, "address", address);
+DO_SET(user, "name", name);
+DO_SET(user, "age", age);
+
+// Later access
+JSValue retrieved_name = DO_GET(user, "name", JSValue);
 ```
 
-### 2. **Class Hierarchies**
+### 2. **Python Interpreter**
 ```c
-// Create "Person" prototype
-do_object person_proto = do_create();
-do_set_string(person_proto, "species", "human");
-do_set_method(person_proto, "speak", person_speak_method);
+// Python objects
+typedef struct { int refcount; PyTypeObject* ob_type; /* ... */ } PyObject;
 
-// Create "Student" prototype inheriting from Person
-do_object student_proto = do_create_with_prototype(person_proto);
-do_set_method(student_proto, "study", student_study_method);
+do_object globals = do_create();
+PyObject* py_string = PyString_FromString("Hello World");
+PyObject* py_int = PyInt_FromLong(42);
 
-// Create instance
-do_object alice = do_create_with_prototype(student_proto);
-do_set_string(alice, "name", "Alice");
+DO_SET(globals, "message", py_string);  
+DO_SET(globals, "answer", py_int);
 
-// alice.speak() -> calls person_speak_method
-// alice.study() -> calls student_study_method
+// Prototype-based inheritance for Python classes
+do_object person_class = do_create();
+PyObject* init_method = /* ... */;
+DO_SET(person_class, "__init__", init_method);
 ```
 
-### 3. **Configuration Objects**
+### 3. **Configuration System**
 ```c
-do_object config = do_from_json(`{
-    "database": {
-        "host": "localhost",
-        "port": 5432,
-        "timeout": 30.0
-    },
-    "features": ["auth", "logging"]
-}`);
+// Application-specific config structure
+typedef struct {
+    char* host;
+    int port;
+    double timeout;
+} DatabaseConfig;
 
-int port = do_get_int(do_get_object(config, "database"), "port", 3306);
+do_object config = do_create();
+DatabaseConfig db_config = {"localhost", 5432, 30.0};
+DO_SET(config, "database", db_config);
+
+// Later retrieval
+DatabaseConfig db = DO_GET(config, "database", DatabaseConfig);
+printf("Connecting to %s:%d\n", db.host, db.port);
 ```
 
-### 4. **Plugin Architecture**
+### 4. **Generic Plugin System**
 ```c
-// Plugin objects with methods
+// Plugin function signatures
+typedef void (*plugin_init_fn)(do_object plugin);
+typedef int (*plugin_process_fn)(do_object plugin, void* data);
+
 do_object plugin = do_create();
-do_set_method(plugin, "init", plugin_init);
-do_set_method(plugin, "process", plugin_process);
-do_set_method(plugin, "cleanup", plugin_cleanup);
+DO_SET(plugin, "init", my_plugin_init);
+DO_SET(plugin, "process", my_plugin_process);
 
-// Dynamic method dispatch
-do_call(plugin, "init", NULL);
+// Plugin state
+int plugin_state = PLUGIN_READY;
+DO_SET(plugin, "state", plugin_state);
+
+// Dynamic dispatch
+plugin_init_fn init = DO_GET(plugin, "init", plugin_init_fn);
+if (init) init(plugin);
 ```
 
-### 5. **High-Performance Language Interpreters**
+### 5. **High-Performance Lua-style Interpreter**
 ```c
-// Compile-time: intern string literals for maximum performance
-const char* INTERN_NAME = string_intern("name");
-const char* INTERN_AGE = string_intern("age");
+// Lua value type
+typedef struct { int tag; union { double n; void* p; } value; } lua_Value;
 
-// Runtime: blazing fast property access using pre-interned keys
-do_set_interned(obj, INTERN_NAME, make_string_value("Alice"));
-do_value_t name_val = do_get_interned(obj, INTERN_NAME);
+// Pre-intern common keys for speed
+const char* INTERN_METATABLE = string_intern("__metatable");
+const char* INTERN_INDEX = string_intern("__index");
 
-// Dynamic property access: runtime interning but optimal for future access
-char* user_key = evaluate_expression(expr);
-do_set(obj, user_key, value);  // Key gets interned for fast future lookups
+do_object lua_table = do_create();
+lua_Value index_fn = /* ... */;
+
+// Blazing fast access with pre-interned keys
+DO_SET_INTERNED(lua_table, INTERN_INDEX, index_fn);
+lua_Value retrieved = DO_GET_INTERNED(lua_table, INTERN_INDEX, lua_Value);
 ```
 
 ## Performance Characteristics
 
 ### Memory Usage
 - **Per object**: ~20 bytes + property storage
-- **Per property**: ~24 bytes (key pointer + value + flags)
+- **Per property**: ~32 bytes (key pointer + data pointer + size + destructor + stb_ds overhead)
 - **String interning**: Reduces key storage overhead
 - **Reference counting**: Automatic cleanup, no GC pauses
+- **Generic storage**: Data copied like DA (value semantics), but destructor enables complex cleanup
 
 ### Time Complexity
 - **Property get**: O(1) with hash table, O(n) with linear array
@@ -334,23 +326,23 @@ Objects automatically upgrade from linear array to hash table storage when prope
 #define PROPERTY_EQUAL(a,b) ((a.key) == (b.key))   // Pointer equality for interned strings
 
 // Property lookup implementation
-do_value_t find_own_property(do_object obj, const char* key) {
+void* find_own_property(do_object obj, const char* key) {
     char* interned_key = string_intern(key);  // Get interned version
     
     if (obj->is_hashed) {
         // O(1) hash table lookup using pointer-based hash
         do_property_t lookup = {interned_key};
         do_property_t* found = hmget(obj->properties.hash_props, lookup);
-        return found ? found->value : do_undefined_value();
+        return found ? found->data : NULL;
     } else {
         // O(n) linear search using pointer equality (fast for interned strings)
         int len = arrlen(obj->properties.linear_props);
         for (int i = 0; i < len; i++) {
             if (obj->properties.linear_props[i].key == interned_key) {  // Pointer comparison!
-                return obj->properties.linear_props[i].value;
+                return obj->properties.linear_props[i].data;
             }
         }
-        return do_undefined_value();
+        return NULL;
     }
 }
 
@@ -446,6 +438,6 @@ void maybe_upgrade_to_hash(do_object obj) {
 
 ## Conclusion
 
-This design provides a powerful yet lightweight dynamic object system suitable for interpreters, embedded systems, and applications requiring runtime object manipulation. By building on `dynamic_array.h` foundations and using prototype-based inheritance, we achieve maximum flexibility with minimal complexity and memory overhead.
+This design provides a completely generic, lightweight dynamic object system suitable for any interpreter, embedded system, or application requiring runtime object manipulation. By making DO type-agnostic like `dynamic_array.h` and using prototype-based inheritance, we achieve maximum flexibility with minimal assumptions about the application's type system.
 
-The library fills a gap in the C ecosystem by providing JavaScript-style objects with C performance, making it ideal for implementing dynamic languages on resource-constrained platforms.
+The library serves as a **universal object container** that any language implementation can use with their own value types, whether that's Python's PyObject, JavaScript's NaN-boxed values, Lua's tagged unions, or custom application structures. This generic approach makes DO broadly applicable across many use cases while maintaining the performance and memory efficiency needed for resource-constrained platforms.

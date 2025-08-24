@@ -877,6 +877,300 @@ void test_object_with_circular_properties(void) {
 }
 
 /* =============================================================================
+ * METHOD SUPPORT TESTS 
+ * ============================================================================= */
+
+// Test method signatures
+typedef void (*simple_method_fn)(do_object self);
+typedef int (*method_with_args_fn)(do_object self, int arg);
+typedef const char* (*getter_method_fn)(do_object self);
+
+// Global counters for testing method calls
+static int method_call_count = 0;
+static int last_method_arg = 0;
+
+// Test method implementations
+void test_simple_method(do_object self) {
+    method_call_count++;
+    // Access object properties in method
+    int value = DO_GET(self, "value", int);
+    last_method_arg = value;
+}
+
+int test_method_with_args(do_object self, int arg) {
+    method_call_count++;
+    last_method_arg = arg;
+    
+    // Return value based on object state and argument
+    int base = DO_GET(self, "base", int);
+    return base + arg;
+}
+
+const char* test_getter_method(do_object self) {
+    method_call_count++;
+    return DO_GET(self, "name", char*);
+}
+
+// Alternative method for testing shadowing
+void test_shadow_method(do_object self) {
+    (void)self; // Suppress unused parameter warning
+    method_call_count += 10;  // Different behavior
+}
+
+// JavaScript-style method implementations for interpreter test
+typedef struct {
+    int type;  // 0=number, 1=string
+    union {
+        int number;
+        char* string;
+    } value;
+} js_value_t;
+
+js_value_t test_js_add_method(do_object self, js_value_t other) {
+    method_call_count++;
+    js_value_t my_val = DO_GET(self, "value", js_value_t);
+    
+    js_value_t result = {0};
+    if (my_val.type == 0 && other.type == 0) {
+        // Number addition
+        result.type = 0;
+        result.value.number = my_val.value.number + other.value.number;
+    }
+    return result;
+}
+
+const char* test_js_to_string_method(do_object self) {
+    method_call_count++;
+    js_value_t my_val = DO_GET(self, "value", js_value_t);
+    
+    if (my_val.type == 0) {
+        // Convert number to string (simplified)
+        return "42";  // Hardcoded for test
+    }
+    return my_val.value.string;
+}
+
+/**
+ * Test basic function pointer storage and retrieval
+ */
+void test_method_storage_basic(void) {
+    do_object obj = do_create(NULL);
+    TEST_ASSERT_NOT_NULL(obj);
+    
+    method_call_count = 0;
+    
+    // Store method as property
+    DO_SET(obj, "simple_method", test_simple_method);
+    DO_SET(obj, "method_with_args", test_method_with_args); 
+    DO_SET(obj, "getter_method", test_getter_method);
+    
+    // Verify methods are stored
+    TEST_ASSERT_TRUE(do_has(obj, "simple_method"));
+    TEST_ASSERT_TRUE(do_has(obj, "method_with_args"));
+    TEST_ASSERT_TRUE(do_has(obj, "getter_method"));
+    
+    // Retrieve and verify method pointers
+    simple_method_fn simple = DO_GET(obj, "simple_method", simple_method_fn);
+    method_with_args_fn with_args = DO_GET(obj, "method_with_args", method_with_args_fn);
+    getter_method_fn getter = DO_GET(obj, "getter_method", getter_method_fn);
+    
+    TEST_ASSERT_NOT_NULL(simple);
+    TEST_ASSERT_NOT_NULL(with_args);
+    TEST_ASSERT_NOT_NULL(getter);
+    
+    // Verify function pointers point to correct functions
+    TEST_ASSERT_EQUAL_PTR(test_simple_method, simple);
+    TEST_ASSERT_EQUAL_PTR(test_method_with_args, with_args);
+    TEST_ASSERT_EQUAL_PTR(test_getter_method, getter);
+    
+    do_release(&obj);
+}
+
+/**
+ * Test calling methods stored as properties
+ */
+void test_method_calling(void) {
+    do_object obj = do_create(NULL);
+    TEST_ASSERT_NOT_NULL(obj);
+    
+    method_call_count = 0;
+    last_method_arg = 0;
+    
+    // Set up object state
+    DO_SET(obj, "value", 42);
+    DO_SET(obj, "base", 10);
+    DO_SET(obj, "name", "TestObject");
+    
+    // Store methods
+    DO_SET(obj, "simple_method", test_simple_method);
+    DO_SET(obj, "method_with_args", test_method_with_args);
+    DO_SET(obj, "getter_method", test_getter_method);
+    
+    // Call simple method
+    simple_method_fn simple = DO_GET(obj, "simple_method", simple_method_fn);
+    TEST_ASSERT_NOT_NULL(simple);
+    simple(obj);
+    
+    TEST_ASSERT_EQUAL_INT(1, method_call_count);
+    TEST_ASSERT_EQUAL_INT(42, last_method_arg);  // Method accessed obj.value
+    
+    // Call method with arguments
+    method_with_args_fn with_args = DO_GET(obj, "method_with_args", method_with_args_fn);
+    TEST_ASSERT_NOT_NULL(with_args);
+    int result = with_args(obj, 5);
+    
+    TEST_ASSERT_EQUAL_INT(2, method_call_count);
+    TEST_ASSERT_EQUAL_INT(5, last_method_arg);   // Method received argument
+    TEST_ASSERT_EQUAL_INT(15, result);           // base(10) + arg(5) = 15
+    
+    // Call getter method
+    getter_method_fn getter = DO_GET(obj, "getter_method", getter_method_fn);
+    TEST_ASSERT_NOT_NULL(getter);
+    const char* name = getter(obj);
+    
+    TEST_ASSERT_EQUAL_INT(3, method_call_count);
+    TEST_ASSERT_EQUAL_STRING("TestObject", name);
+    
+    do_release(&obj);
+}
+
+/**
+ * Test method inheritance through prototype chains
+ */
+void test_method_inheritance(void) {
+    // Create prototype with methods
+    do_object prototype = do_create(NULL);
+    TEST_ASSERT_NOT_NULL(prototype);
+    
+    DO_SET(prototype, "simple_method", test_simple_method);
+    DO_SET(prototype, "method_with_args", test_method_with_args);
+    DO_SET(prototype, "shared_value", 100);
+    
+    // Create instance inheriting from prototype  
+    do_object instance = do_create_with_prototype(prototype, NULL);
+    TEST_ASSERT_NOT_NULL(instance);
+    
+    // Instance has its own properties
+    DO_SET(instance, "value", 55);
+    DO_SET(instance, "base", 20);
+    
+    method_call_count = 0;
+    
+    // Call inherited method
+    simple_method_fn inherited_simple = DO_GET(instance, "simple_method", simple_method_fn);
+    TEST_ASSERT_NOT_NULL(inherited_simple);
+    TEST_ASSERT_EQUAL_PTR(test_simple_method, inherited_simple);  // Same function pointer
+    
+    inherited_simple(instance);
+    TEST_ASSERT_EQUAL_INT(1, method_call_count);
+    TEST_ASSERT_EQUAL_INT(55, last_method_arg);  // Accessed instance.value, not prototype
+    
+    // Call inherited method with args
+    method_with_args_fn inherited_with_args = DO_GET(instance, "method_with_args", method_with_args_fn);
+    TEST_ASSERT_NOT_NULL(inherited_with_args);
+    
+    int result = inherited_with_args(instance, 7);
+    TEST_ASSERT_EQUAL_INT(2, method_call_count);
+    TEST_ASSERT_EQUAL_INT(27, result);  // instance.base(20) + arg(7) = 27
+    
+    // Verify prototype properties are also inherited
+    int shared = DO_GET(instance, "shared_value", int);
+    TEST_ASSERT_EQUAL_INT(100, shared);
+    
+    do_release(&instance);
+    do_release(&prototype);
+}
+
+/**
+ * Test method shadowing (instance methods override prototype methods)
+ */
+void test_method_shadowing(void) {
+    // Create prototype with method
+    do_object prototype = do_create(NULL);
+    DO_SET(prototype, "test_method", test_simple_method);
+    
+    // Create instance
+    do_object instance = do_create_with_prototype(prototype, NULL);
+    DO_SET(instance, "value", 99);
+    
+    method_call_count = 0;
+    
+    // Initially, instance uses prototype method
+    simple_method_fn method = DO_GET(instance, "test_method", simple_method_fn);
+    TEST_ASSERT_EQUAL_PTR(test_simple_method, method);
+    
+    method(instance);
+    TEST_ASSERT_EQUAL_INT(1, method_call_count);
+    TEST_ASSERT_EQUAL_INT(99, last_method_arg);
+    
+    // Shadow the prototype method with instance method
+    DO_SET(instance, "test_method", test_shadow_method);
+    
+    // Now instance uses its own method
+    method = DO_GET(instance, "test_method", simple_method_fn);
+    TEST_ASSERT_EQUAL_PTR(test_shadow_method, method);
+    
+    method(instance);
+    TEST_ASSERT_EQUAL_INT(11, method_call_count);  // 1 + 10 from test_shadow_method
+    
+    do_release(&instance);
+    do_release(&prototype);
+}
+
+/**
+ * Test interpreter-style method dispatch scenario
+ * Simulates a simple JavaScript-like object system
+ */
+void test_interpreter_style_methods(void) {
+    // Define method signatures for interpreter
+    typedef js_value_t (*js_binary_op_fn)(do_object self, js_value_t other);
+    typedef const char* (*js_to_string_fn)(do_object self);
+    
+    // Create "Number" prototype
+    do_object number_proto = do_create(NULL);
+    DO_SET(number_proto, "add", test_js_add_method);
+    DO_SET(number_proto, "toString", test_js_to_string_method);
+    
+    // Create number instances
+    do_object num1 = do_create_with_prototype(number_proto, NULL);
+    do_object num2 = do_create_with_prototype(number_proto, NULL);
+    
+    // Set values
+    js_value_t val1 = {0, .value.number = 10};
+    js_value_t val2 = {0, .value.number = 20};
+    
+    DO_SET(num1, "value", val1);
+    DO_SET(num2, "value", val2);
+    
+    method_call_count = 0;
+    
+    // Call methods like an interpreter would
+    js_binary_op_fn add_method = DO_GET(num1, "add", js_binary_op_fn);
+    TEST_ASSERT_NOT_NULL(add_method);
+    
+    js_value_t result = add_method(num1, val2);
+    TEST_ASSERT_EQUAL_INT(1, method_call_count);
+    TEST_ASSERT_EQUAL_INT(0, result.type);  // Number type
+    TEST_ASSERT_EQUAL_INT(30, result.value.number);  // 10 + 20
+    
+    // Call toString method
+    js_to_string_fn to_string = DO_GET(num1, "toString", js_to_string_fn);
+    TEST_ASSERT_NOT_NULL(to_string);
+    
+    const char* str_result = to_string(num1);
+    TEST_ASSERT_EQUAL_INT(2, method_call_count);
+    TEST_ASSERT_EQUAL_STRING("42", str_result);
+    
+    // Test method inheritance - num2 has same methods
+    js_to_string_fn inherited_to_string = DO_GET(num2, "toString", js_to_string_fn);
+    TEST_ASSERT_EQUAL_PTR(test_js_to_string_method, inherited_to_string);
+    
+    do_release(&num1);
+    do_release(&num2);
+    do_release(&number_proto);
+}
+
+/* =============================================================================
  * ENHANCED TYPE INFERENCE TESTS
  * ============================================================================= */
 
@@ -1037,6 +1331,13 @@ int main(void) {
     RUN_TEST(test_complex_inheritance_scenario);
     RUN_TEST(test_mixed_storage_types);
     RUN_TEST(test_object_with_circular_properties);
+    
+    // Method support tests
+    RUN_TEST(test_method_storage_basic);
+    RUN_TEST(test_method_calling);
+    RUN_TEST(test_method_inheritance);
+    RUN_TEST(test_method_shadowing);
+    RUN_TEST(test_interpreter_style_methods);
     
     // Enhanced type inference tests
     RUN_TEST(test_enhanced_type_inference);
