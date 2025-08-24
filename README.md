@@ -1,5 +1,10 @@
 # dynamic_object.h
 
+[![Version](https://img.shields.io/badge/version-v0.0.2-blue.svg)](https://github.com/your-username/dynamic_object.h/releases)
+[![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.cppreference.com/w/c/11)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Unlicense-green.svg)](#license)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20MCU-lightgrey.svg)](#platform-support)
+
 A high-performance, prototype-based dynamic object system for C with enhanced type inference and comprehensive method support. Designed for maximum portability across PC and microcontroller targets, with special focus on language interpreters and reference-counted object systems.
 
 ## Features
@@ -44,8 +49,8 @@ A high-performance, prototype-based dynamic object system for C with enhanced ty
 
 ## Quick Start
 
-```c
-#define DYNAMIC_OBJECT_IMPLEMENTATION
+```c`
+#define DO_IMPLEMENTATION
 #include "dynamic_object.h"
 
 int main() {
@@ -190,7 +195,7 @@ Customize before including:
 // Disable string interning
 #define DO_STRING_INTERNING 0
 
-#define DYNAMIC_OBJECT_IMPLEMENTATION
+#define DO_IMPLEMENTATION
 #include "dynamic_object.h"
 ```
 
@@ -325,6 +330,11 @@ cmake --build build
 - Method calls: O(property lookup time) + function call
 
 ## Version History
+
+### v0.0.2 (Current)
+- Update macro name from DYNAMIC_OBJECT_IMPLEMENTATION to DO_IMPLEMENTATION
+- Fix Doxygen documentation configuration and version display
+- Improve project metadata consistency across all files
 
 ### v0.0.1 (Initial Release)
 - Complete prototype-based object system

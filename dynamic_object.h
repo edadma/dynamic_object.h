@@ -17,10 +17,10 @@
  * - Microcontroller friendly
  * 
  * Usage:
- * #define DYNAMIC_OBJECT_IMPLEMENTATION
+ * #define DO_IMPLEMENTATION
  * #include "dynamic_object.h"
  * 
- * @version 1.0.0
+ * @version 0.0.2
  * @author Generated for dynamic object system
  */
 
@@ -35,7 +35,9 @@
 #include <assert.h>
 
 // stb_ds.h for dynamic arrays and hash maps
-#define STB_DS_IMPLEMENTATION
+#ifdef DO_IMPLEMENTATION
+    #define STB_DS_IMPLEMENTATION
+#endif
 #include "libs/stb/stb_ds.h"
 
 #ifdef __cplusplus
@@ -613,7 +615,7 @@ DO_DEF void do_foreach_property(do_object obj,
  * IMPLEMENTATION SECTION
  * ============================================================================= */
 
-#ifdef DYNAMIC_OBJECT_IMPLEMENTATION
+#ifdef DO_IMPLEMENTATION
 
 #include <string.h>
 #include <stdlib.h>
@@ -1230,7 +1232,7 @@ DO_DEF void do_foreach_property(do_object obj,
     }
 }
 
-#endif // DYNAMIC_OBJECT_IMPLEMENTATION
+#endif // DO_IMPLEMENTATION
 
 #ifdef __cplusplus
 }

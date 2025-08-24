@@ -15,7 +15,7 @@
 
 #include "libs/unity/unity.h"
 
-#define DYNAMIC_OBJECT_IMPLEMENTATION
+#define DO_IMPLEMENTATION
 #include "dynamic_object.h"
 
 #include <stdio.h>
