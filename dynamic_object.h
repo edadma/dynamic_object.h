@@ -89,7 +89,8 @@ extern "C" {
     #define DO_ATOMIC_INT int
     #define DO_ATOMIC_LOAD(ptr) (*(ptr))
     #define DO_ATOMIC_STORE(ptr, val) (*(ptr) = (val))
-    #define DO_ATOMIC_FETCH_ADD(ptr, val) (*(ptr) += (val), *(ptr) - (val))
+    #define DO_ATOMIC_FETCH_ADD(ptr, val) ((*(ptr) += (val)) - (val))
+    #define DO_ATOMIC_FETCH_ADD_VOID(ptr, val) (void)((*(ptr) += (val)) - (val))
 #endif
 
 // Function decoration
@@ -411,11 +412,19 @@ DO_DEF int do_delete_interned(do_object obj, const char* interned_key);
  * @param value Value to store (type inferred)
  * @note Automatically infers type using typeof or auto
  */
+#if DO_SUPPORT_TYPE_INFERENCE
+#define DO_SET(obj, key, value) \
+    do { \
+        DO_MAKE_VAR_WITH_INFERRED_TYPE(_temp, value); \
+        do_set(obj, key, &_temp, sizeof(_temp)); \
+    } while(0)
+#else
 #define DO_SET(obj, key, value) \
     do { \
         DO_TYPEOF(value) _temp = (value); \
         do_set(obj, key, &_temp, sizeof(_temp)); \
     } while(0)
+#endif
 
 /**
  * @brief Type-safe property getter
@@ -436,11 +445,19 @@ DO_DEF int do_delete_interned(do_object obj, const char* interned_key);
  * @param value Value to store (type inferred)
  * @note Automatically infers type using typeof or auto
  */
+#if DO_SUPPORT_TYPE_INFERENCE
+#define DO_SET_INTERNED(obj, key, value) \
+    do { \
+        DO_MAKE_VAR_WITH_INFERRED_TYPE(_temp, value); \
+        do_set_interned(obj, key, &_temp, sizeof(_temp)); \
+    } while(0)
+#else
 #define DO_SET_INTERNED(obj, key, value) \
     do { \
         DO_TYPEOF(value) _temp = (value); \
         do_set_interned(obj, key, &_temp, sizeof(_temp)); \
     } while(0)
+#endif
 
 #define DO_GET_INTERNED(obj, key, type) \
     (*(type*)do_get_interned(obj, key))
@@ -513,10 +530,7 @@ DO_DEF int do_delete_interned(do_object obj, const char* interned_key);
  * @param fallback Default value if property doesn't exist
  */
 #define DO_GET_OR(obj, key, type, fallback) \
-    ({ \
-        void* _ptr = do_get(obj, key); \
-        _ptr ? *(type*)_ptr : (fallback); \
-    })
+    (do_get(obj, key) ? *(type*)do_get(obj, key) : (fallback))
 
 /**
  * @brief Copy property from one object to another (type-specific version)
@@ -526,19 +540,10 @@ DO_DEF int do_delete_interned(do_object obj, const char* interned_key);
  * @param type Data type of the property
  * @return 1 if copied successfully, 0 if source property doesn't exist
  * @note This is a simplified version - requires knowing the property type
+ * @note This macro calls do_get twice, so it's less efficient than the braced version
  */
 #define DO_COPY_PROPERTY(dest, src, key, type) \
-    ({ \
-        void* _src_data = do_get(src, key); \
-        int _result = 0; \
-        if (_src_data) { \
-            type _value = *(type*)_src_data; \
-            if (do_set(dest, key, &_value, sizeof(type)) == DO_SUCCESS) { \
-                _result = 1; \
-            } \
-        } \
-        _result; \
-    })
+    (do_get(src, key) ? (do_set(dest, key, do_get(src, key), sizeof(type)) == DO_SUCCESS ? 1 : 0) : 0)
 
 /**
  * @brief Enhanced property deletion with return value
@@ -821,7 +826,11 @@ DO_DEF do_object do_create_with_prototype(do_object prototype, void (*release_fn
 
 DO_DEF do_object do_retain(do_object obj) {
     DO_ASSERT(obj != NULL);
-    DO_ATOMIC_FETCH_ADD(&obj->ref_count, 1);
+#if DO_ATOMIC_REFCOUNT
+    (void)DO_ATOMIC_FETCH_ADD(&obj->ref_count, 1);
+#else
+    DO_ATOMIC_FETCH_ADD_VOID(&obj->ref_count, 1);
+#endif
     return obj;
 }
 
