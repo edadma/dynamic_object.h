@@ -5,6 +5,9 @@ project(dynamic_object C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Include directories for dependencies
+include_directories(libs/stb)
+
 # Add compiler flags for debugging and warnings
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -Wall -Wextra -Wpedantic")
 set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")

@@ -20,7 +20,7 @@
  * #define DO_IMPLEMENTATION
  * #include "dynamic_object.h"
  * 
- * @version 0.0.2
+ * @version 0.0.3
  * @author Generated for dynamic object system
  */
 
@@ -38,7 +38,7 @@
 #ifdef DO_IMPLEMENTATION
     #define STB_DS_IMPLEMENTATION
 #endif
-#include "libs/stb/stb_ds.h"
+#include <stb_ds.h>
 
 #ifdef __cplusplus
 extern "C" {

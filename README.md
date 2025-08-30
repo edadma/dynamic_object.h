@@ -1,6 +1,6 @@
 # dynamic_object.h
 
-[![Version](https://img.shields.io/badge/version-v0.0.2-blue.svg)](https://github.com/your-username/dynamic_object.h/releases)
+[![Version](https://img.shields.io/badge/version-v0.0.3-blue.svg)](https://github.com/your-username/dynamic_object.h/releases)
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.cppreference.com/w/c/11)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Unlicense-green.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20MCU-lightgrey.svg)](#platform-support)
@@ -298,8 +298,38 @@ cmake --build build
 
 - **Core**: Only standard C library (`stdlib.h`, `string.h`, `assert.h`)
 - **Atomic Operations**: `stdatomic.h` (C11, optional)
-- **Hash Tables**: `stb_ds.h` (included)
+- **Hash Tables**: `stb_ds.h` (required, see installation below)
 - **Testing**: Unity framework (included)
+
+### Installing stb_ds.h Dependency
+
+This library requires `stb_ds.h` for its hash table implementation. The header uses `#include <stb_ds.h>` to allow flexible dependency management:
+
+**Option 1: Local Project (recommended)**
+```bash
+# Place stb_ds.h in your project's include directory
+mkdir -p deps/stb
+wget -O deps/stb/stb_ds.h https://raw.githubusercontent.com/nothings/stb/master/stb_ds.h
+
+# Configure your build system (CMake example)
+include_directories(deps/stb)
+```
+
+**Option 2: System-wide Installation**
+```bash
+# Install to system include directory
+sudo wget -O /usr/local/include/stb_ds.h \
+  https://raw.githubusercontent.com/nothings/stb/master/stb_ds.h
+```
+
+**Option 3: Package Manager**
+```bash
+# Using vcpkg
+vcpkg install stb
+
+# Using conan
+conan install stb/cci.20230920@
+```
 
 ## Platform Support
 
@@ -331,7 +361,13 @@ cmake --build build
 
 ## Version History
 
-### v0.0.2 (Current)
+### v0.0.3 (Current)
+- Changed stb_ds.h include to use angle brackets for better portability
+- Library can now be copied between projects without modification
+- Dependency path configured through build system, not source code
+- Updated CMake configuration for cleaner dependency management
+
+### v0.0.2
 - Update macro name from DYNAMIC_OBJECT_IMPLEMENTATION to DO_IMPLEMENTATION
 - Fix Doxygen documentation configuration and version display
 - Improve project metadata consistency across all files
